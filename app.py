@@ -25,18 +25,14 @@ uploaded_file = st.sidebar.file_uploader(
 
 @st.cache_data(ttl=60)
 def load_and_clean_data(file_source):
-    # Load ONLY the first sheet to avoid multi-sheet double counting
     excel_file = pd.ExcelFile(file_source)
     sheet_to_load = excel_file.sheet_names[0]
     data = pd.read_excel(file_source, sheet_name=sheet_to_load)
     
-    # Strip whitespace from column headers
+    # Clean headers
     data.columns = [str(col).strip() for col in data.columns]
     
-    # -------------------------------------------------------------------------
-    # DELETE DESCRIPTION COLUMNS
-    # -------------------------------------------------------------------------
-    # Drop columns that match 'description', 'desc', 'notes', etc. (case-insensitive)
+    # Remove Description / Notes columns
     cols_to_drop = [
         col for col in data.columns 
         if col.lower() in ['description', 'desc', 'notes', 'details', 'comment', 'comments']
@@ -44,11 +40,11 @@ def load_and_clean_data(file_source):
     if cols_to_drop:
         data = data.drop(columns=cols_to_drop)
     
-    # Clean empty and duplicate rows
+    # Clean rows
     data = data.dropna(how='all')
     data = data.drop_duplicates()
     
-    # Filter out summary/total rows to prevent double counting
+    # Filter out pre-existing total rows from Excel to avoid double counting
     text_cols = data.select_dtypes(include=['object', 'category']).columns
     filter_mask = pd.Series(True, index=data.index)
     keywords = ['TOTAL', 'SUBTOTAL', 'SUB-TOTAL', 'GRAND TOTAL', 'SUMMARY', 'OVERALL']
@@ -82,7 +78,7 @@ else:
 # 2. MAIN APP DISPLAY
 # -----------------------------------------------------------------------------
 if df is not None and not df.empty:
-    st.success(f"✅ Data loaded successfully from sheet: **'{sheet_used}'**")
+    st.success(f"✅ Data loaded successfully ({len(df)} line items from sheet **'{sheet_used}'**)")
 
     # Find numeric columns
     numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
@@ -90,7 +86,6 @@ if df is not None and not df.empty:
     if not numeric_cols:
         st.error("⚠️ No numeric cost/amount columns found in this Excel sheet.")
     else:
-        # Select Primary Amount Column (defaults to first numeric column)
         selected_amount_col = st.sidebar.selectbox(
             "Select Amount Column to Total:",
             options=numeric_cols,
@@ -100,21 +95,39 @@ if df is not None and not df.empty:
         # Calculate Total
         total_amount = df[selected_amount_col].sum()
 
-        # Display Total Metric
+        # Display Top Summary Card
         st.metric(
             label=f"Total Budget ({selected_amount_col})", 
             value=f"₦{total_amount:,.2f}"
         )
         st.markdown("---")
 
-        # Tabs Layout - DATA TABLE IS FIRST
+        # ---------------------------------------------------------------------
+        # BUILD TABLE WITH TOTAL ROW AT THE BOTTOM
+        # ---------------------------------------------------------------------
+        df_display = df.copy()
+        
+        # Create the Total row dictionary
+        total_row = {}
+        for col in df_display.columns:
+            if col in numeric_cols:
+                total_row[col] = df_display[col].sum()
+            else:
+                total_row[col] = "TOTAL"  # Label the text column as "TOTAL"
+        
+        # Append the row at the bottom (Row 32)
+        df_with_total = pd.concat([df_display, pd.DataFrame([total_row])], ignore_index=True)
+
+        # Tabs Layout
         tab1, tab2, tab3 = st.tabs(["📋 Data Table", "📊 Visualizations", "🏦 Bank API Status"])
 
-        # --- TAB 1: DATA TABLE (FIRST) ---
+        # --- TAB 1: DATA TABLE (WITH TOTAL ROW AT BOTTOM) ---
         with tab1:
             st.subheader("Raw Budget Data View")
-            st.caption("Note: 'Description' column has been removed automatically.")
-            st.dataframe(df, use_container_width=True)
+            st.caption("Scroll to the bottom of the table to view the computed **TOTAL** row.")
+            
+            # Format numbers cleanly with commas for display
+            st.dataframe(df_with_total, use_container_width=True)
 
         # --- TAB 2: VISUALIZATIONS ---
         with tab2:
@@ -126,7 +139,7 @@ if df is not None and not df.empty:
             
             with col1:
                 fig_bar = px.bar(
-                    df, 
+                    df,  # Uses clean df without total row for accurate chart plotting
                     x=x_col, 
                     y=selected_amount_col, 
                     title=f"{selected_amount_col} by {x_col}",
