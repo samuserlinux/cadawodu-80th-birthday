@@ -14,7 +14,7 @@ st.title("🎉 C.A. Dawodu 80th Birthday Dashboard")
 st.markdown("---")
 
 # -----------------------------------------------------------------------------
-# 1. FILE LOADING, CLEANING & COLUMN REMOVAL
+# 1. FILE LOADING & CLEANING
 # -----------------------------------------------------------------------------
 st.sidebar.header("📁 Data Source & Controls")
 uploaded_file = st.sidebar.file_uploader(
@@ -29,7 +29,7 @@ def load_and_clean_data(file_source):
     sheet_to_load = excel_file.sheet_names[0]
     data = pd.read_excel(file_source, sheet_name=sheet_to_load)
     
-    # Clean headers
+    # Clean column headers
     data.columns = [str(col).strip() for col in data.columns]
     
     # Remove Description / Notes columns
@@ -92,10 +92,10 @@ if df is not None and not df.empty:
             index=0
         )
 
-        # Calculate Total
+        # Calculate Overall Total
         total_amount = df[selected_amount_col].sum()
 
-        # Display Top Summary Card
+        # Display Top Summary Metric
         st.metric(
             label=f"Total Budget ({selected_amount_col})", 
             value=f"₦{total_amount:,.2f}"
@@ -103,30 +103,55 @@ if df is not None and not df.empty:
         st.markdown("---")
 
         # ---------------------------------------------------------------------
-        # BUILD TABLE WITH TOTAL ROW AT THE BOTTOM
+        # CALCULATION: ADD PERCENTAGE OF TOTAL COLUMN
         # ---------------------------------------------------------------------
-        df_display = df.copy()
+        df_calc = df.copy()
         
-        # Create the Total row dictionary
+        # Compute percentage for each row
+        if total_amount > 0:
+            df_calc['% of Total'] = (df_calc[selected_amount_col] / total_amount) * 100
+        else:
+            df_calc['% of Total'] = 0.0
+
+        # Position '% of Total' right after the selected Amount column
+        amount_idx = df_calc.columns.get_loc(selected_amount_col)
+        cols = list(df_calc.columns)
+        cols.insert(amount_idx + 1, cols.pop(cols.index('% of Total')))
+        df_calc = df_calc[cols]
+
+        # ---------------------------------------------------------------------
+        # BUILD TABLE WITH FORMATTING & BOTTOM TOTAL ROW
+        # ---------------------------------------------------------------------
+        df_display = df_calc.copy()
+
+        # Create Total Row
         total_row = {}
         for col in df_display.columns:
-            if col in numeric_cols:
-                total_row[col] = df_display[col].sum()
+            if col == selected_amount_col:
+                total_row[col] = f"₦{total_amount:,.2f}"
+            elif col == '% of Total':
+                total_row[col] = "100.00%"
+            elif col in numeric_cols:
+                col_sum = df_display[col].sum()
+                total_row[col] = f"{col_sum:,.2f}"
             else:
-                total_row[col] = "TOTAL"  # Label the text column as "TOTAL"
-        
-        # Append the row at the bottom (Row 32)
-        df_with_total = pd.concat([df_display, pd.DataFrame([total_row])], ignore_index=True)
+                total_row[col] = "TOTAL"
+
+        # Format rows for display in data table
+        df_formatted = df_display.copy()
+        df_formatted[selected_amount_col] = df_formatted[selected_amount_col].apply(lambda x: f"₦{x:,.2f}")
+        df_formatted['% of Total'] = df_formatted['% of Total'].apply(lambda x: f"{x:.2f}%")
+
+        # Append bottom row
+        df_with_total = pd.concat([df_formatted, pd.DataFrame([total_row])], ignore_index=True)
 
         # Tabs Layout
         tab1, tab2, tab3 = st.tabs(["📋 Data Table", "📊 Visualizations", "🏦 Bank API Status"])
 
-        # --- TAB 1: DATA TABLE (WITH TOTAL ROW AT BOTTOM) ---
+        # --- TAB 1: DATA TABLE (WITH % OF TOTAL & BOTTOM TOTAL ROW) ---
         with tab1:
             st.subheader("Raw Budget Data View")
-            st.caption("Scroll to the bottom of the table to view the computed **TOTAL** row.")
-            
-            # Format numbers cleanly with commas for display
+            st.caption("Includes calculated **% of Total** and a bottom **TOTAL** row.")
             st.dataframe(df_with_total, use_container_width=True)
 
         # --- TAB 2: VISUALIZATIONS ---
@@ -139,7 +164,7 @@ if df is not None and not df.empty:
             
             with col1:
                 fig_bar = px.bar(
-                    df,  # Uses clean df without total row for accurate chart plotting
+                    df_calc, 
                     x=x_col, 
                     y=selected_amount_col, 
                     title=f"{selected_amount_col} by {x_col}",
@@ -150,10 +175,10 @@ if df is not None and not df.empty:
 
             with col2:
                 fig_pie = px.pie(
-                    df, 
+                    df_calc, 
                     names=x_col, 
                     values=selected_amount_col, 
-                    title=f"{selected_amount_col} Distribution",
+                    title=f"{selected_amount_col} Breakdown (%)",
                     hole=0.4
                 )
                 st.plotly_chart(fig_pie, use_container_width=True)
