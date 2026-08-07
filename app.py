@@ -14,7 +14,7 @@ st.title("🎉 C.A. Dawodu 80th Birthday Dashboard")
 st.markdown("---")
 
 # -----------------------------------------------------------------------------
-# 1. FILE LOADING & DE-DUPLICATION
+# 1. FILE LOADING, CLEANING & COLUMN REMOVAL
 # -----------------------------------------------------------------------------
 st.sidebar.header("📁 Data Source & Controls")
 uploaded_file = st.sidebar.file_uploader(
@@ -30,20 +30,29 @@ def load_and_clean_data(file_source):
     sheet_to_load = excel_file.sheet_names[0]
     data = pd.read_excel(file_source, sheet_name=sheet_to_load)
     
-    # Strip whitespace from column names
+    # Strip whitespace from column headers
     data.columns = [str(col).strip() for col in data.columns]
     
-    # Remove empty rows
-    data = data.dropna(how='all')
+    # -------------------------------------------------------------------------
+    # DELETE DESCRIPTION COLUMNS
+    # -------------------------------------------------------------------------
+    # Drop columns that match 'description', 'desc', 'notes', etc. (case-insensitive)
+    cols_to_drop = [
+        col for col in data.columns 
+        if col.lower() in ['description', 'desc', 'notes', 'details', 'comment', 'comments']
+    ]
+    if cols_to_drop:
+        data = data.drop(columns=cols_to_drop)
     
-    # Remove exact row duplicates
+    # Clean empty and duplicate rows
+    data = data.dropna(how='all')
     data = data.drop_duplicates()
     
-    # Rigorous filtering for subtotal/summary keywords across text columns
+    # Filter out summary/total rows to prevent double counting
     text_cols = data.select_dtypes(include=['object', 'category']).columns
     filter_mask = pd.Series(True, index=data.index)
-    
     keywords = ['TOTAL', 'SUBTOTAL', 'SUB-TOTAL', 'GRAND TOTAL', 'SUMMARY', 'OVERALL']
+    
     for col in text_cols:
         for kw in keywords:
             filter_mask &= ~data[col].astype(str).str.upper().str.contains(kw, na=False)
@@ -70,10 +79,10 @@ else:
                 st.warning(f"Error loading {file_name}: {e}")
 
 # -----------------------------------------------------------------------------
-# 2. APP MAIN DISPLAY
+# 2. MAIN APP DISPLAY
 # -----------------------------------------------------------------------------
 if df is not None and not df.empty:
-    st.success(f"✅ Loaded Sheet: **'{sheet_used}'** ({len(df)} line items detected)")
+    st.success(f"✅ Data loaded successfully from sheet: **'{sheet_used}'**")
 
     # Find numeric columns
     numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
@@ -81,37 +90,31 @@ if df is not None and not df.empty:
     if not numeric_cols:
         st.error("⚠️ No numeric cost/amount columns found in this Excel sheet.")
     else:
-        # Sidebar control: Let user select EXACTLY which column contains the amount
+        # Select Primary Amount Column (defaults to first numeric column)
         selected_amount_col = st.sidebar.selectbox(
-            "Select Primary Amount Column to Total:",
+            "Select Amount Column to Total:",
             options=numeric_cols,
-            index=0,
-            help="If your sheet has multiple numeric columns (e.g. Budget vs Actual), pick the right one."
+            index=0
         )
 
-        # Calculate isolated total
-        true_total = df[selected_amount_col].sum()
+        # Calculate Total
+        total_amount = df[selected_amount_col].sum()
 
-        # Display Prominent Metric
+        # Display Total Metric
         st.metric(
-            label=f"Calculated Total ({selected_amount_col})", 
-            value=f"₦{true_total:,.2f}"
+            label=f"Total Budget ({selected_amount_col})", 
+            value=f"₦{total_amount:,.2f}"
         )
         st.markdown("---")
 
-        # Tabs - Data Table FIRST
-        tab1, tab2, tab3 = st.tabs(["📋 Data Table (Raw Items)", "📊 Visualizations", "🏦 Bank API Status"])
+        # Tabs Layout - DATA TABLE IS FIRST
+        tab1, tab2, tab3 = st.tabs(["📋 Data Table", "📊 Visualizations", "🏦 Bank API Status"])
 
-        # --- TAB 1: DATA TABLE ---
+        # --- TAB 1: DATA TABLE (FIRST) ---
         with tab1:
-            st.subheader("Line Items Included in Total")
-            st.caption("Inspect the rows below to check if any subtotal rows are still present.")
+            st.subheader("Raw Budget Data View")
+            st.caption("Note: 'Description' column has been removed automatically.")
             st.dataframe(df, use_container_width=True)
-            
-            # Show debug sum per column
-            st.markdown("#### Column Sums Breakdown:")
-            for n_col in numeric_cols:
-                st.write(f"• **{n_col}** Sum: `₦{df[n_col].sum():,.2f}`")
 
         # --- TAB 2: VISUALIZATIONS ---
         with tab2:
