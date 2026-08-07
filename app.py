@@ -14,7 +14,7 @@ st.title("🎉 C.A. Dawodu 80th Birthday Dashboard")
 st.markdown("---")
 
 # -----------------------------------------------------------------------------
-# 1. SIDEBAR / TOP FILE UPLOADER WIDGET
+# 1. SIDEBAR / FILE UPLOADER WIDGET
 # -----------------------------------------------------------------------------
 st.sidebar.header("📁 Data Source")
 uploaded_file = st.sidebar.file_uploader(
@@ -25,13 +25,27 @@ uploaded_file = st.sidebar.file_uploader(
 
 @st.cache_data(ttl=60)
 def load_data(file_source):
-    """Loads and returns data from an uploaded file or local path."""
-    return pd.read_excel(file_source)
+    """Loads and cleans data from an Excel spreadsheet."""
+    # Load first sheet of Excel file
+    data = pd.read_excel(file_source, sheet_name=0)
+    
+    # Clean column headers
+    data.columns = [str(col).strip() for col in data.columns]
+    
+    # 1. Remove exact duplicate rows
+    data = data.drop_duplicates()
+    
+    # 2. Exclude summary/total rows to prevent double counting
+    for col in data.columns:
+        if data[col].dtype == 'object':
+            data = data[~data[col].astype(str).str.upper().str.contains('TOTAL|SUBTOTAL|GRAND TOTAL', na=False)]
+            
+    return data
 
 df = None
 file_loaded_from = None
 
-# Priority 1: User uploaded a file in the web app
+# Priority 1: Web App Uploader
 if uploaded_file is not None:
     try:
         df = load_data(uploaded_file)
@@ -39,7 +53,7 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"Error reading uploaded Excel file: {e}")
 
-# Priority 2: Fallback to default files in the GitHub repository
+# Priority 2: Fallback to GitHub repository Excel file
 else:
     default_files = ["Event_Budget_Breakdown.xlsx", "Event_Budget_Breakdown.xls"]
     for file_name in default_files:
@@ -54,32 +68,36 @@ else:
 # -----------------------------------------------------------------------------
 # 2. MAIN APP DISPLAY
 # -----------------------------------------------------------------------------
-if df is not None:
+if df is not None and not df.empty:
     st.success(f"✅ Data loaded successfully from **{file_loaded_from}**")
     
-    # Clean column names (strip leading/trailing whitespace)
-    df.columns = [str(col).strip() for col in df.columns]
-
-    # Metrics Summary Bar (Adapts if numeric columns exist)
+    # Identify numeric columns for metrics & charts
     numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-    
+
+    # Metrics Bar (Naira Formatted)
     if numeric_cols:
         cols = st.columns(min(len(numeric_cols), 4))
         for idx, col_name in enumerate(numeric_cols[:4]):
             total_val = df[col_name].sum()
             cols[idx].metric(
                 label=col_name.title(), 
-                value=f"{total_val:,.2f}"
+                value=f"₦{total_val:,.2f}"
             )
         st.markdown("---")
 
-    # Layout Tabs
-    tab1, tab2, tab3 = st.tabs(["📊 Visualizations", "📋 Data Table", "🏦 Bank API Status"])
+    # Layout Tabs - DATA TABLE IS NOW TAB 1 (FIRST)
+    tab1, tab2, tab3 = st.tabs(["📋 Data Table", "📊 Visualizations", "🏦 Bank API Status"])
 
+    # --- TAB 1: DATA TABLE (NOW SHOWS FIRST) ---
     with tab1:
+        st.subheader("Raw Budget Data View")
+        st.caption("Double-counting protection applied (Total/Subtotal summary rows filtered out).")
+        st.dataframe(df, use_container_width=True)
+
+    # --- TAB 2: VISUALIZATIONS ---
+    with tab2:
         st.subheader("Budget Analytics")
-        if len(numeric_cols) >= 1:
-            # First categorical column for X-axis, first numeric for Y-axis
+        if numeric_cols:
             cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
             x_col = cat_cols[0] if cat_cols else df.columns[0]
             y_col = numeric_cols[0]
@@ -94,6 +112,7 @@ if df is not None:
                     title=f"{y_col} by {x_col}",
                     color_discrete_sequence=["#1f77b4"]
                 )
+                fig_bar.update_layout(xaxis_tickangle=-45)
                 st.plotly_chart(fig_bar, use_container_width=True)
 
             with col2:
@@ -106,23 +125,18 @@ if df is not None:
                 )
                 st.plotly_chart(fig_pie, use_container_width=True)
         else:
-            st.info("No numeric data found in the file to plot charts.")
+            st.info("No numeric data columns found in the spreadsheet to plot charts.")
 
-    with tab2:
-        st.subheader("Raw Data View")
-        st.dataframe(df, use_container_width=True)
-
+    # --- TAB 3: BANK API ---
     with tab3:
         st.subheader("Bank API Integration")
-        # Safe import check for bank_api module
         try:
             from bank_api import BankAccountAPI
             st.success("`bank_api` module imported successfully!")
-            # Call bank API methods here as needed
         except ImportError:
-            st.warning("`bank_api.py` not found or `BankAccountAPI` class missing.")
+            st.warning("`bank_api.py` not found or `BankAccountAPI` class missing in root directory.")
         except Exception as e:
             st.error(f"Error initializing Bank API: {e}")
 
 else:
-    st.info("💡 **No budget file found.** Use the sidebar on the left to upload an Excel file, or ensure `Event_Budget_Breakdown.xlsx` is uploaded to your GitHub repository root folder.")
+    st.info("💡 **No budget data found.** Use the sidebar on the left to upload your Excel spreadsheet, or verify that `Event_Budget_Breakdown.xlsx` exists in your GitHub repository.")
