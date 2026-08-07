@@ -13,21 +13,42 @@ st.set_page_config(
 st.title("🎉 C.A. Dawodu 80th Birthday Dashboard")
 st.markdown("---")
 
+DEFAULT_FILE_PATH = "Event_Budget_Breakdown.xlsx"
+
 # -----------------------------------------------------------------------------
-# 1. FILE LOADING & CLEANING
+# 1. PERMANENT FILE SAVING & CACHE CLEARING
 # -----------------------------------------------------------------------------
 st.sidebar.header("📁 Data Source & Controls")
+
 uploaded_file = st.sidebar.file_uploader(
-    "Upload Budget Excel File", 
+    "Upload New Budget Excel File", 
     type=["xlsx", "xls"],
-    help="Upload your Excel sheet or use default repository file."
+    help="Uploading a new file will replace the current default budget for everyone!"
 )
 
-@st.cache_data(ttl=60)
-def load_and_clean_data(file_source):
-    excel_file = pd.ExcelFile(file_source)
+# If a user uploads a new file, save it locally to the server to make it permanent!
+if uploaded_file is not None:
+    try:
+        # 1. Overwrite the default file on disk
+        with open(DEFAULT_FILE_PATH, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        
+        # 2. Clear Streamlit's data cache so all connected devices see the new file
+        st.cache_data.clear()
+        
+        st.sidebar.success("✅ New file pinned as the current default for all users!")
+    except Exception as e:
+        st.sidebar.error(f"Error saving uploaded file: {e}")
+
+# Function to read and clean the active budget file
+@st.cache_data(ttl=1)  # Minimal cache TTL so changes refresh instantly
+def load_and_clean_data(file_path):
+    if not os.path.exists(file_path):
+        return None, None
+
+    excel_file = pd.ExcelFile(file_path)
     sheet_to_load = excel_file.sheet_names[0]
-    data = pd.read_excel(file_source, sheet_name=sheet_to_load)
+    data = pd.read_excel(file_path, sheet_name=sheet_to_load)
     
     # Clean column headers
     data.columns = [str(col).strip() for col in data.columns]
@@ -56,29 +77,19 @@ def load_and_clean_data(file_source):
     clean_df = data[filter_mask].copy()
     return clean_df, sheet_to_load
 
-df = None
-sheet_used = None
+# Load the file from disk
+df, sheet_used = load_and_clean_data(DEFAULT_FILE_PATH)
 
-if uploaded_file is not None:
-    try:
-        df, sheet_used = load_and_clean_data(uploaded_file)
-    except Exception as e:
-        st.error(f"Error reading uploaded file: {e}")
-else:
-    default_files = ["Event_Budget_Breakdown.xlsx", "Event_Budget_Breakdown.xls"]
-    for file_name in default_files:
-        if os.path.exists(file_name):
-            try:
-                df, sheet_used = load_and_clean_data(file_name)
-                break
-            except Exception as e:
-                st.warning(f"Error loading {file_name}: {e}")
+# Add a manual force-refresh button in sidebar just in case
+if st.sidebar.button("🔄 Force Refresh Live Balance"):
+    st.cache_data.clear()
+    st.rerun()
 
 # -----------------------------------------------------------------------------
 # 2. MAIN APP DISPLAY
 # -----------------------------------------------------------------------------
 if df is not None and not df.empty:
-    st.success(f"✅ Data loaded successfully ({len(df)} line items from sheet **'{sheet_used}'**)")
+    st.success(f"✅ Active Data: **'{sheet_used}'** ({len(df)} line items)")
 
     # Find numeric columns
     numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
@@ -148,7 +159,7 @@ if df is not None and not df.empty:
         # Tabs Layout
         tab1, tab2, tab3 = st.tabs(["📋 Data Table", "📊 Visualizations", "🏦 Bank API Status"])
 
-        # --- TAB 1: DATA TABLE (WITH % OF TOTAL & BOTTOM TOTAL ROW) ---
+        # --- TAB 1: DATA TABLE ---
         with tab1:
             st.subheader("Raw Budget Data View")
             st.caption("Includes calculated **% of Total** and a bottom **TOTAL** row.")
@@ -195,4 +206,4 @@ if df is not None and not df.empty:
                 st.error(f"Error: {e}")
 
 else:
-    st.info("💡 No budget file found. Please upload an Excel sheet.")
+    st.info("💡 No budget file found. Please upload an Excel sheet using the sidebar.")
