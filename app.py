@@ -1,157 +1,157 @@
+import os
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
-import os
-from dotenv import load_dotenv
-from bank_api import BankAccountAPI
 
-load_dotenv()
-CURRENCY = os.getenv("CURRENCY_SYMBOL", "₦")
-TARGET_BUDGET = float(os.getenv("TARGET_BUDGET", 10000000))
-
+# Page configuration
 st.set_page_config(
-    page_title="C. A. Dawodu 80th Birthday Party",
-    page_icon="🎂",
+    page_title="C.A. Dawodu 80th Birthday Budget",
+    page_icon="🎉",
     layout="wide"
 )
 
-# Load Colorful CSS
-if os.path.exists("assets/style.css"):
-    with open("assets/style.css") as f:
-        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+st.title("🎉 C.A. Dawodu 80th Birthday Dashboard")
+st.markdown("---")
 
-bank = BankAccountAPI()
-
-# Session State for Initial Data
-if 'contributions' not in st.session_state:
-    st.session_state.contributions = [
-        {"Sibling": "Tunde (UK)", "Amount": 2500000, "Date": "2026-07-10"},
-        {"Sibling": "Bisi (USA)", "Amount": 3000000, "Date": "2026-07-12"},
-        {"Sibling": "Kemi (Nigeria)", "Amount": 2000000, "Date": "2026-07-15"},
-    ]
-
-if 'expenses' not in st.session_state:
-    st.session_state.expenses = [
-        {"Category": "Venue & Decor", "Description": "Hall Deposit", "Amount": 2000000, "Paid By": "Shared Account"},
-        {"Category": "Catering", "Description": "Food & Drinks Deposit", "Amount": 2500000, "Paid By": "Shared Account"},
-        {"Category": "Entertainment", "Description": "Band Deposit", "Amount": 800000, "Paid By": "Shared Account"},
-    ]
-
-# --- HEADER BANNER ---
-st.markdown(
-    """
-    <div class="main-header">
-        <h1>🎉 C. A. Dawodu 80th Birthday Party 🎂</h1>
-        <p>Real-Time Bank Balance, Family Contributions & Transparent Expense Tracker</p>
-    </div>
-    """, 
-    unsafe_allow_html=True
+# -----------------------------------------------------------------------------
+# 1. FILE LOADING & DE-DUPLICATION
+# -----------------------------------------------------------------------------
+st.sidebar.header("📁 Data Source & Controls")
+uploaded_file = st.sidebar.file_uploader(
+    "Upload Budget Excel File", 
+    type=["xlsx", "xls"],
+    help="Upload your Excel sheet or use default repository file."
 )
 
-bank_info = bank.fetch_realtime_balance(st.session_state.contributions, st.session_state.expenses)
-
-# --- TOP METRICS ---
-col1, col2, col3, col4 = st.columns(4)
-
-total_raised = sum(c["Amount"] for c in st.session_state.contributions)
-total_spent = sum(e["Amount"] for e in st.session_state.expenses)
-current_balance = bank_info["available_balance"]
-remaining_budget = TARGET_BUDGET - total_spent
-
-with col1:
-    st.metric("🏦 Live Bank Balance", f"{CURRENCY}{current_balance:,.2f}")
-with col2:
-    st.metric("💰 Total Contributions", f"{CURRENCY}{total_raised:,.2f}")
-with col3:
-    st.metric("💸 Total Expenses Paid", f"{CURRENCY}{total_spent:,.2f}")
-with col4:
-    st.metric("🎯 Remaining Target", f"{CURRENCY}{remaining_budget:,.2f}")
-
-st.divider()
-
-# --- CHARTS SECTION ---
-c1, c2 = st.columns([2, 1])
-
-with c1:
-    st.subheader("📊 Financial Breakdown")
-    df_chart = pd.DataFrame([
-        {"Type": "Target Budget", "Amount": TARGET_BUDGET},
-        {"Type": "Contributed", "Amount": total_raised},
-        {"Type": "Spent", "Amount": total_spent},
-        {"Type": "Live Balance", "Amount": current_balance}
-    ])
+@st.cache_data(ttl=60)
+def load_and_clean_data(file_source):
+    # Load ONLY the first sheet to avoid multi-sheet double counting
+    excel_file = pd.ExcelFile(file_source)
+    sheet_to_load = excel_file.sheet_names[0]
+    data = pd.read_excel(file_source, sheet_name=sheet_to_load)
     
-    fig = px.bar(
-        df_chart, x="Type", y="Amount", color="Type",
-        color_discrete_map={
-            "Target Budget": "#8B5CF6",
-            "Contributed": "#10B981",
-            "Spent": "#EF4444",
-            "Live Balance": "#3B82F6"
-        },
-        text_auto=',.0f'
-    )
-    fig.update_layout(showlegend=False, height=350)
-    st.plotly_chart(fig, use_container_width=True)
-
-with c2:
-    st.subheader("🎯 Contribution Progress")
-    progress_pct = min((total_raised / TARGET_BUDGET) * 100, 100)
+    # Strip whitespace from column names
+    data.columns = [str(col).strip() for col in data.columns]
     
-    fig_gauge = go.Figure(go.Indicator(
-        mode = "gauge+number",
-        value = progress_pct,
-        number = {'suffix': "%"},
-        gauge = {
-            'axis': {'range': [None, 100]},
-            'bar': {'color': "#FF4B2B"},
-            'steps': [
-                {'range': [0, 50], 'color': "#FFE4E6"},
-                {'range': [50, 80], 'color': "#FEF3C7"},
-                {'range': [80, 100], 'color': "#D1FAE5"}
-            ]
-        }
-    ))
-    fig_gauge.update_layout(height=350)
-    st.plotly_chart(fig_gauge, use_container_width=True)
+    # Remove empty rows
+    data = data.dropna(how='all')
+    
+    # Remove exact row duplicates
+    data = data.drop_duplicates()
+    
+    # Rigorous filtering for subtotal/summary keywords across text columns
+    text_cols = data.select_dtypes(include=['object', 'category']).columns
+    filter_mask = pd.Series(True, index=data.index)
+    
+    keywords = ['TOTAL', 'SUBTOTAL', 'SUB-TOTAL', 'GRAND TOTAL', 'SUMMARY', 'OVERALL']
+    for col in text_cols:
+        for kw in keywords:
+            filter_mask &= ~data[col].astype(str).str.upper().str.contains(kw, na=False)
+            
+    clean_df = data[filter_mask].copy()
+    return clean_df, sheet_to_load
 
-st.divider()
+df = None
+sheet_used = None
 
-# --- LEDGERS AND INPUT FORMS ---
-tab1, tab2 = st.tabs(["💵 Sibling Contributions", "🧾 Party Expenses"])
+if uploaded_file is not None:
+    try:
+        df, sheet_used = load_and_clean_data(uploaded_file)
+    except Exception as e:
+        st.error(f"Error reading uploaded file: {e}")
+else:
+    default_files = ["Event_Budget_Breakdown.xlsx", "Event_Budget_Breakdown.xls"]
+    for file_name in default_files:
+        if os.path.exists(file_name):
+            try:
+                df, sheet_used = load_and_clean_data(file_name)
+                break
+            except Exception as e:
+                st.warning(f"Error loading {file_name}: {e}")
 
-with tab1:
-    st.subheader("Log New Contribution")
-    with st.form("contrib_form", clear_on_submit=True):
-        fc1, fc2, fc3 = st.columns(3)
-        name = fc1.text_input("Contributor Name & Location")
-        amt = fc2.number_input(f"Amount ({CURRENCY})", min_value=0.0, step=50000.0)
-        dt = fc3.date_input("Date Paid")
-        sub = st.form_submit_button("Save Contribution")
-        
-        if sub and name and amt > 0:
-            st.session_state.contributions.append({"Sibling": name, "Amount": amt, "Date": str(dt)})
-            st.success(f"Recorded contribution of {CURRENCY}{amt:,.2f} from {name}!")
-            st.rerun()
+# -----------------------------------------------------------------------------
+# 2. APP MAIN DISPLAY
+# -----------------------------------------------------------------------------
+if df is not None and not df.empty:
+    st.success(f"✅ Loaded Sheet: **'{sheet_used}'** ({len(df)} line items detected)")
 
-    st.subheader("Contributions History")
-    st.dataframe(pd.DataFrame(st.session_state.contributions), use_container_width=True)
+    # Find numeric columns
+    numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
 
-with tab2:
-    st.subheader("Log New Expense")
-    with st.form("exp_form", clear_on_submit=True):
-        ec1, ec2, ec3, ec4 = st.columns(4)
-        cat = ec1.selectbox("Category", ["Venue & Decor", "Catering", "Entertainment", "Gifts & Souvenirs", "Logistics", "Other"])
-        desc = ec2.text_input("Description")
-        e_amt = ec3.number_input(f"Amount ({CURRENCY})", min_value=0.0, step=10000.0)
-        p_by = ec4.text_input("Paid By", value="Shared Bank Account")
-        e_sub = st.form_submit_button("Save Expense")
-        
-        if e_sub and desc and e_amt > 0:
-            st.session_state.expenses.append({"Category": cat, "Description": desc, "Amount": e_amt, "Paid By": p_by})
-            st.success(f"Logged expense: {desc} ({CURRENCY}{e_amt:,.2f})")
-            st.rerun()
+    if not numeric_cols:
+        st.error("⚠️ No numeric cost/amount columns found in this Excel sheet.")
+    else:
+        # Sidebar control: Let user select EXACTLY which column contains the amount
+        selected_amount_col = st.sidebar.selectbox(
+            "Select Primary Amount Column to Total:",
+            options=numeric_cols,
+            index=0,
+            help="If your sheet has multiple numeric columns (e.g. Budget vs Actual), pick the right one."
+        )
 
-    st.subheader("Expense Ledger")
-    st.dataframe(pd.DataFrame(st.session_state.expenses), use_container_width=True)
+        # Calculate isolated total
+        true_total = df[selected_amount_col].sum()
+
+        # Display Prominent Metric
+        st.metric(
+            label=f"Calculated Total ({selected_amount_col})", 
+            value=f"₦{true_total:,.2f}"
+        )
+        st.markdown("---")
+
+        # Tabs - Data Table FIRST
+        tab1, tab2, tab3 = st.tabs(["📋 Data Table (Raw Items)", "📊 Visualizations", "🏦 Bank API Status"])
+
+        # --- TAB 1: DATA TABLE ---
+        with tab1:
+            st.subheader("Line Items Included in Total")
+            st.caption("Inspect the rows below to check if any subtotal rows are still present.")
+            st.dataframe(df, use_container_width=True)
+            
+            # Show debug sum per column
+            st.markdown("#### Column Sums Breakdown:")
+            for n_col in numeric_cols:
+                st.write(f"• **{n_col}** Sum: `₦{df[n_col].sum():,.2f}`")
+
+        # --- TAB 2: VISUALIZATIONS ---
+        with tab2:
+            st.subheader("Budget Analytics")
+            cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+            x_col = cat_cols[0] if cat_cols else df.columns[0]
+
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                fig_bar = px.bar(
+                    df, 
+                    x=x_col, 
+                    y=selected_amount_col, 
+                    title=f"{selected_amount_col} by {x_col}",
+                    color_discrete_sequence=["#1f77b4"]
+                )
+                fig_bar.update_layout(xaxis_tickangle=-45)
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+            with col2:
+                fig_pie = px.pie(
+                    df, 
+                    names=x_col, 
+                    values=selected_amount_col, 
+                    title=f"{selected_amount_col} Distribution",
+                    hole=0.4
+                )
+                st.plotly_chart(fig_pie, use_container_width=True)
+
+        # --- TAB 3: BANK API ---
+        with tab3:
+            st.subheader("Bank API Integration")
+            try:
+                from bank_api import BankAccountAPI
+                st.success("`bank_api` module imported successfully!")
+            except ImportError:
+                st.warning("`bank_api.py` not found in root directory.")
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+else:
+    st.info("💡 No budget file found. Please upload an Excel sheet.")
